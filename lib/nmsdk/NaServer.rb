@@ -242,10 +242,14 @@ class NaServer
   # If you also use set_port(), call set_port() AFTER calling this routine.
   #
   # The default is 'FILER'.
-
+  # --- MLN --
+  # May need to modify url structure for DFM and OCUM, however we are only addressing filers for now.
+  # (sample) http://naslab01.crd.ge.com/servlets/netapp.servlets.admin.XMLrequest_file. 
+  #FILER_URL = '/servlets/netapp.servlets.admin.XMLrequest_filer'
   def set_server_type(server_type)
     if (server_type.casecmp('filer') == 0)
-      @url = FILER_URL
+      #@url = FILER_URL
+      @url = @server + '.crd.ge.com' + FILER_URL
       @dtd = FILER_dtd
     elsif (server_type.casecmp('netcache') ==  0)
       @url = NETCACHE_URL
@@ -374,15 +378,15 @@ class NaServer
     originator_id_req = ""
     app_name_req = ""
 
-    if !@vfiler.blank?
+    if !@vfiler.nil?
         vfiler_req = " vfiler=\"" + @vfiler + "\""
     end
 
-    if !@originator_id.blank?
+    if !@originator_id.nil?
         originator_id_req = " originator_id=\"" + @originator_id + "\""
     end
 
-    if !@nmsdk_app.blank?
+    if !@nmsdk_app.nil?
         app_name_req = " nmsdk_app='" + @nmsdk_app + "'"
     end
 
@@ -402,6 +406,7 @@ class NaServer
     end
 
     begin
+      require "pry"; binding.pry
       http = Net::HTTP.new(@server, @port)
       if(@transport_type.eql?("HTTPS"))
         http.use_ssl = true
@@ -437,13 +442,14 @@ class NaServer
         http.open_timeout = @timeout
         http.read_timeout = @timeout
       end
-      request = Net::HTTP::Post.new(@url)
-      if(!@style.eql?("HOSTS"))
-        request.basic_auth @user, @password
-      end
-      request.content_type = "text/xml; charset=\"UTF-8\""
-      request.body = content
-      response = http.start {|http| http.request(request)}
+      #request = Net::HTTP::Post.new(@url)
+      #if(!@style.eql?("HOSTS"))
+      #  request.basic_auth @user, @password
+      #end
+      #request.content_type = "text/xml; charset=\"UTF-8\""
+      #request.body = content
+      #response = http.start {|http| http.request(request)}
+      post_to_nas(@url, content)
     rescue Timeout::Error => msg
       print("\nError : ")
       fail_response(13001, msg)
@@ -463,9 +469,41 @@ class NaServer
     if(response.code.eql?("401"))
       fail_response(13002,"Authorization failed")
     end
-    parse_xml(response.body)
+    #parse_xml(response.body)
   end
 
+  def post_to_nas(url, xml, request_max = 5)
+    @uri = URI.parse url        
+    request = Net::HTTP::Post.new(url)
+    request.content_type = "text/xml; charset=\"UTF-8\""    
+    request.basic_auth(@user, @password)
+    request.body = xml
+    http = Net::HTTP.new(@uri.host, @uri.port)
+    response = http.request(request)
+    case response
+    when Net::HTTPSucess
+      #response.body
+      parse_xml(response.body)
+    when Net::HTTPRedirection
+      post_to_nas(response['location'], request_max - 1)
+    else
+      response.code
+    end    
+  end  
+
+  def get_nas_response(uri, request_max = 5)
+    raise "Max number of redirects reached" if request_max <= 0
+       
+    response = Net::HTTP.get_response(uri)
+    case response.code.to_i
+    when 200
+      response.body
+    when 301..303
+      get_nas_response(URI(response['location']), request_max - 1)
+    else
+      response.code
+    end
+  end
 
   #A convenience routine which wraps invoke_elem().
   #It constructs an NaElement with name $api, and for
